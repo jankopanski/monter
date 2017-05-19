@@ -134,6 +134,7 @@ struct file_operations monter_fops = {
 
 static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	long ret;
+  uint32_t reg = 0;
 	struct monter_dev *monter_dev;
 	struct device *device;
 	int minor;
@@ -168,6 +169,29 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 		goto err_pci_iomap;
 	}
 
+  reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
+  printk(KERN_INFO "ENABLE0: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "STATUS0: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_INFO "INTR0: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
+  printk(KERN_INFO "INTR_ENABLE0: %u", reg);
+
+  iowrite32(3, monter_dev->bar0 + MONTER_RESET);
+  iowrite32(7, monter_dev->bar0 + MONTER_INTR);
+  iowrite32(7, monter_dev->bar0 + MONTER_INTR_ENABLE);
+  iowrite32(5, monter_dev->bar0 + MONTER_ENABLE);
+
+  reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
+  printk(KERN_INFO "ENABLE1: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "STATUS1: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_INFO "INTR1: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
+  printk(KERN_INFO "INTR_ENABLE1: %u", reg);
+
 	pci_set_master(dev);
 	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
   if (IS_ERR_VALUE(ret)) {
@@ -182,6 +206,15 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
   }
 
 	// mutex_init
+
+  reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
+  printk(KERN_INFO "ENABLE2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "STATUS2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_INFO "INTR2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
+  printk(KERN_INFO "INTR_ENABLE2: %u", reg);
 
 	// iowrite32
 
@@ -212,6 +245,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	// printk(KERN_INFO "iowrite32");
 	// reg = ioread32(baraddr);
 	// printk(KERN_INFO "ioread32: %ud", reg);
+  printk(KERN_INFO "probe end");
   return 0;
 
 	device_destroy(monter_class, monter_dev->cdev.dev);
@@ -239,6 +273,7 @@ static void monter_remove(struct pci_dev *dev) {
 
   // iowrite32(0, aesdev->bar0 + AESDEV_ENABLE);
   // iowrite32(0, aesdev->bar0 + AESDEV_INTR_ENABLE);
+  iowrite32(3, monter_dev->bar0 + MONTER_RESET);
   device_destroy(monter_class, monter_dev->cdev.dev);
   cdev_del(&monter_dev->cdev);
   idr_remove(&monter_idr, MINOR(monter_dev->cdev.dev));
