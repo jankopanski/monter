@@ -32,7 +32,7 @@ int monter_major = 0;
 static DEFINE_IDR(monter_idr);
 
 struct monter_dev {
-  // dev_t devno;
+  // być może będzie trzeba dodać current_context dla funkcji obsługi przerwań
   struct pci_dev *pdev;
   struct cdev cdev;
 	void __iomem *bar0;
@@ -41,43 +41,82 @@ struct monter_dev {
 
 struct monter_dev *monter_devices;
 
-ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
+struct monter_context {
+  struct monter_dev *dev;
+};
+
+static irqreturn_t monter_irq_handler(int irq, void *dev) {
+  struct monter_dev *monter_dev = dev;
+  uint32_t intr;
+
+  intr = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_INFO "interrupt request %ud", intr);
+  // printk(KERN_WARNING "interrupt request %ud", intr);
+  if (!intr) {
+    return IRQ_NONE;
+  }
+  iowrite32(intr, monter_dev->bar0 + MONTER_INTR);
+
+  return IRQ_HANDLED;
+}
+
+static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 	printk(KERN_INFO "monter_read");
 	printk(KERN_WARNING "READ");
   return 0;
 }
 
-ssize_t scull_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos) {
+static ssize_t monter_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos) {
 	printk(KERN_INFO "scull_write");
 	printk(KERN_WARNING "WRITE");
   return 0;
 }
 
-long scull_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 	printk(KERN_INFO "scull_ioctl");
   return 0;
 }
 
-int mmap(struct file *flip, struct vm_area_struct *vm_area) {
+int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
 	printk(KERN_INFO "mmap");
 	printk(KERN_WARNING "MMAP");
   return 0;
 }
 
-int monter_open(struct inode *inode, struct file *filp) {
-	dev_t devno = inode->i_rdev; // adresować urządzenie po minor
-	int major = MAJOR(devno), minor = MINOR(devno);
-	struct cdev cdev = *(inode->i_cdev); // blackbox?
-	int mod = (int)filp->f_mode;
-	printk(KERN_INFO "monter_open");
-	printk(KERN_WARNING "OPEN");
-	printk(KERN_INFO "major: %d, minor: %d, mod: %d", major, minor, mod);
+static int monter_open(struct inode *inode, struct file *filp) {
+  long ret;
+  int major = MAJOR(inode->i_rdev), minor = MINOR(inode->i_rdev);
+  struct monter_dev *monter_dev;
+  struct monter_context *context;
+
+  printk(KERN_INFO "monter_open");
+
+  monter_dev = container_of(inode->i_cdev, struct monter_dev, cdev);
+  context = kmalloc(sizeof(struct monter_context), GFP_KERNEL);
+  if (!context) {
+    printk(KERN_WARNING "kmalloc %d:%d", major, minor);
+    return -ENOMEM;
+  }
+  context->dev = monter_dev;
+  // u->mode = -1;
+  filp->private_data = context;
+
   return 0;
+	// dev_t devno = inode->i_rdev; // adresować urządzenie po minor
+	// int major = MAJOR(devno), minor = MINOR(devno);
+	// struct cdev cdev = *(inode->i_cdev); // blackbox?
+	// int mod = (int)filp->f_mode;
+	// printk(KERN_WARNING "OPEN");
+	// printk(KERN_INFO "major: %d, minor: %d, mod: %d", major, minor, mod);
+  // return 0;
 }
 
-int scull_release(struct inode *inode, struct file *filp) {
-	printk(KERN_INFO "scull_release");
+static int monter_release(struct inode *inode, struct file *filp) {
+  struct monter_context *context = filp->private_data;
+
+	printk(KERN_INFO "monter_release");
 	printk(KERN_WARNING "RELEASE");
+  kfree(context);
 	return 0;
 }
 
@@ -85,12 +124,12 @@ int scull_release(struct inode *inode, struct file *filp) {
 struct file_operations monter_fops = {
   .owner = THIS_MODULE,
   .read = monter_read,
-  // write: monter_write,
-  // ioctl: monter_ioctl,
-  // mmap: monter_mmap,
+  .write = monter_write,
+  .unlocked_ioctl = monter_ioctl,
+  .mmap = monter_mmap,
   .open = monter_open,
-  // release: monter_release,
-  // fsync: monter_fsync,
+  .release = monter_release,
+  //.fsync = monter_fsync,
 };
 
 static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
@@ -98,9 +137,6 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	struct monter_dev *monter_dev;
 	struct device *device;
 	int minor;
-	// int BAR0 = 0;
-	// void __iomem *baraddr;
-	// unsigned int reg;
 
 	printk(KERN_INFO "pci_probe");
 
@@ -132,10 +168,18 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 		goto err_pci_iomap;
 	}
 
-	// pci_set_master
-	// dma_set_mask
+	pci_set_master(dev);
+	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
+  if (IS_ERR_VALUE(ret)) {
+    printk(KERN_WARNING "dma_set_mask_and_coherent");
+    goto err_dma_mask;
+  }
 
-	// ret = request_irq(dev->irq, monter_irq, ) // przerwania
+	ret = request_irq(dev->irq, monter_irq_handler, IRQF_SHARED, "monter", monter_dev);
+  if (IS_ERR_VALUE(ret)) {
+    printk(KERN_WARNING "request_irq");
+    goto err_irq;
+  }
 
 	// mutex_init
 
@@ -176,6 +220,9 @@ err_dev:
 err_cdev:
 	idr_remove(&monter_idr, minor);
 err_idr:
+  free_irq(dev->irq, monter_dev);
+err_irq:
+err_dma_mask:
 	pci_iounmap(dev, monter_dev->bar0);
 err_pci_iomap:
 	pci_release_region(dev, 0);
@@ -195,7 +242,7 @@ static void monter_remove(struct pci_dev *dev) {
   device_destroy(monter_class, monter_dev->cdev.dev);
   cdev_del(&monter_dev->cdev);
   idr_remove(&monter_idr, MINOR(monter_dev->cdev.dev));
-  // free_irq(dev->irq, aesdev);
+  free_irq(dev->irq, monter_dev);
   pci_iounmap(dev, monter_dev->bar0);
   pci_release_region(dev, 0);
   pci_disable_device(dev);
@@ -252,18 +299,6 @@ static int __init monter_init(void) {
 		goto err_class;
   }
   monter_major = MAJOR(dev_base);
-
-  // monter_devices = kmalloc(monter_num_devices * sizeof(struct monter_dev), GFP_KERNEL);
-  // if (!monter_devices) {
-  //   ret = - ENOMEM;
-  //   // monter_cleanup_module();
-  //   return ret;
-  // }
-  // memset(monter_devices, 0, monter_num_devices * sizeof(struct monter_dev));
-	//
-  // for (i = 0; i < monter_num_devices; ++i) { // iteracja od zera przy ustalonym monter_minor nie ma sensu
-  //   monter_setup_cdev(&monter_devices[i], i); // nie konfigurowalne
-  // }
 
   ret = pci_register_driver(&monter_driver);
   if (IS_ERR_VALUE(ret)) {
