@@ -105,7 +105,8 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	printk(KERN_INFO "pci_probe");
 
 	monter_dev = kmalloc(sizeof(struct monter_dev), GFP_KERNEL);
-	if (monter_dev) {
+  // printk(KERN_INFO "%p", monter_dev);
+	if (!monter_dev) {
 		printk(KERN_WARNING "kmalloc");
 		return -ENOMEM;
 	}
@@ -186,7 +187,19 @@ err_pci_enable:
 }
 
 static void monter_remove(struct pci_dev *dev) {
-  printk(KERN_INFO "pci_remove");
+  struct monter_dev *monter_dev = pci_get_drvdata(dev);
+  printk(KERN_INFO "monter_remove");
+
+  // iowrite32(0, aesdev->bar0 + AESDEV_ENABLE);
+  // iowrite32(0, aesdev->bar0 + AESDEV_INTR_ENABLE);
+  device_destroy(monter_class, monter_dev->cdev.dev);
+  cdev_del(&monter_dev->cdev);
+  idr_remove(&monter_idr, MINOR(monter_dev->cdev.dev));
+  // free_irq(dev->irq, aesdev);
+  pci_iounmap(dev, monter_dev->bar0);
+  pci_release_region(dev, 0);
+  pci_disable_device(dev);
+  kfree(monter_dev);
 }
 
 // tablica za ID urządzenia pci
