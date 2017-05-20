@@ -11,6 +11,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
 #include <linux/spinlock.h>
+// #include <asm/memory.h>
+// #include <linux/mm.h>
 // #include <asm/atomic.h>
 #include "monter.h"
 #include "monter_ioctl.h"
@@ -33,16 +35,21 @@ static DEFINE_IDR(monter_idr);
 
 struct monter_dev {
   // być może będzie trzeba dodać current_context dla funkcji obsługi przerwań
+  struct device *dev; // class
   struct pci_dev *pdev;
   struct cdev cdev;
 	void __iomem *bar0;
-  // struct device *dev; // do klasy urządzeń potrzebnych do ich dodania do sysfs
+  struct monter_context *current_context;
 };
 
 struct monter_dev *monter_devices;
 
 struct monter_context {
   struct monter_dev *dev;
+  void *data_area;
+  dma_addr_t dma_handle;
+  size_t data_size;
+  short state;
 };
 
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
@@ -73,13 +80,52 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
 }
 
 static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
-	printk(KERN_INFO "scull_ioctl");
-  return 0;
+  size_t size = (size_t) arg;
+  struct monter_context *context = filp->private_data;
+  printk(KERN_INFO "monter_ioctl");
+  // void *data_area;
+  switch (cmd) {
+    case MONTER_IOCTL_SET_SIZE:
+      if (context->state) {
+        printk(KERN_WARNING "context->state: %u", context->state);
+        return -EINVAL;
+      }
+      if (size <= 0 && size > 65536 && size % 4096 != 0) {
+        printk(KERN_WARNING "ioctl size: %lu", size);
+        return -EINVAL;
+      }
+      context->data_area = dma_alloc_coherent(context->dev->dev, size, &context->dma_handle, GFP_DMA32);
+      if (IS_ERR(context->data_area)) {
+        printk(KERN_WARNING "dma_alloc_coherent");
+        return PTR_ERR(context->data_area);
+      }
+      context->data_size = size;
+      context->state = 1;
+      return 0;
+    default:
+      return -ENOTTY;
+  }
 }
 
-int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
-	printk(KERN_INFO "mmap");
-	printk(KERN_WARNING "MMAP");
+static const struct vm_operations_struct monter_vm_ops = { };
+
+static int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
+  long ret;
+  struct monter_context *context = flip->private_data;
+  unsigned long size = vm_area->vm_end - vm_area->vm_start;
+  // unsigned long pfn = virt_to_pfn(context->data_area);
+  unsigned long pfn = virt_to_phys(context->data_area) >> PAGE_SHIFT;
+  vm_area->vm_ops = &monter_vm_ops; // ???
+  printk(KERN_INFO "mmap");
+  if (vm_area->vm_flags != (VM_READ | VM_WRITE | VM_SHARED)) {
+    printk(KERN_WARNING "vm_flags");
+    return -EINVAL;
+  }
+  ret = remap_pfn_range(vm_area, vm_area->vm_start, pfn, size, vm_area->vm_page_prot);
+  if (IS_ERR_VALUE(ret)) {
+    printk(KERN_WARNING "remap_pfn_range");
+    return ret;
+  }
   return 0;
 }
 
@@ -98,6 +144,11 @@ static int monter_open(struct inode *inode, struct file *filp) {
     return -ENOMEM;
   }
   context->dev = monter_dev;
+  context->data_area = NULL;
+  context->dma_handle = 0;
+  context->data_size = 0;
+  context->state = 0;
+  monter_dev->current_context = context;
   // u->mode = -1;
   filp->private_data = context;
 
@@ -163,7 +214,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	}
 
 	monter_dev->bar0 = pci_iomap(dev, 0, 0);
-	if (IS_ERR(monter_dev->bar0)) { // !baraddr
+	if (IS_ERR(monter_dev->bar0)) {
 		printk(KERN_WARNING "pci_iomap");
 		ret = PTR_ERR(monter_dev->bar0);
 		goto err_pci_iomap;
@@ -238,6 +289,8 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 		goto err_dev;
 	}
 
+  monter_dev->current_context = NULL;
+  monter_dev->dev = device;
 	pci_set_drvdata(dev, monter_dev);
 	// reg = ioread32(baraddr);
 	// printk(KERN_INFO "ioread32: %ud", reg);
