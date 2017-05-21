@@ -68,11 +68,11 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
 }
 
 static void context_switch(struct monter_context *context) {
-  uint32_t i, value, value_base = 1, dma_page_addr = ((uint32_t) context->dma_handle) >> 12;
+  uint32_t i, value;
   printk(KERN_INFO "context_switch");
   printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
   for (i = 0; i < 16; ++i) {
-    value = value_base + (i << 8) + ((dma_page_addr + i) << 12);
+    value = MONTER_CMD_PAGE(i, MONTER_CMD_PAGE_ADDR(context->dma_handle + i * 4096), 0);
     printk(KERN_INFO "value: %u %u", i, value);
     iowrite32(value, context->mdev->bar0 + MONTER_FIFO_SEND);
   }
@@ -80,12 +80,37 @@ static void context_switch(struct monter_context *context) {
 }
 
 static long monter_ioctl(struct file*, unsigned int, unsigned long); // TODO remove
+static int monter_mmap(struct file *, struct vm_area_struct *);
 
 static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
+  struct monter_context *context = filp->private_data;
+  // uint32_t *dane = (uint32_t*)1018036224;//(uint32_t*)context->dma_handle;
+  uint32_t *dane = NULL;
+  uint32_t addr, run, status1, status2;
 	printk(KERN_INFO "monter_read");
   monter_ioctl(filp, MONTER_IOCTL_SET_SIZE, 65536);
+  dane = context->data_area;
   // monter_mmap()
+  printk(KERN_INFO "AAA");
   context_switch(filp->private_data);
+  printk(KERN_INFO "BBB: %p %p %llu", dane, context->data_area, context->dma_handle);
+  // zlecenie operacji mnożenia
+  *dane = 1;
+  *(dane + 1) = 2;
+  printk(KERN_INFO "CCC");
+  // addr = MONTER_CMD_ADDR_AB(dane, dane + 1, 0);
+  // run = MONTER_CMD_RUN_MULT(0, dane + 2, 0);
+  status1 = ioread32(context->mdev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "MULT STATUS1: %u", status1);
+  addr = MONTER_CMD_ADDR_AB(context->dma_handle, context->dma_handle + 4, 0);
+  run = MONTER_CMD_RUN_MULT(0, context->dma_handle + 8, 0);
+  iowrite32(addr, context->mdev->bar0 + MONTER_FIFO_SEND);
+  iowrite32(run, context->mdev->bar0 + MONTER_FIFO_SEND);
+  status2 = ioread32(context->mdev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "MULT STATUS2: %u", status2);
+  // wait
+  // ioread32();
+  printk(KERN_INFO "MULT monter_read: %u, %u", addr, run);
   return 0;
 }
 
@@ -184,6 +209,10 @@ static int monter_release(struct inode *inode, struct file *filp) {
 	printk(KERN_INFO "monter_release");
 	// printk(KERN_WARNING "RELEASE");
   // zwalnianie dma_alloc_coherent
+  if (context->state) {
+    dma_free_coherent(&context->mdev->pdev->dev, context->data_size,
+      context->data_area, context->dma_handle);
+  }
   kfree(context);
 	return 0;
 }
