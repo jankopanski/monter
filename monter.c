@@ -35,7 +35,7 @@ static DEFINE_IDR(monter_idr);
 
 struct monter_dev {
   // być może będzie trzeba dodać current_context dla funkcji obsługi przerwań
-  struct device *dev; // class
+  // struct device *dev; // class, pole dev wewnątrz pdev
   struct pci_dev *pdev;
   struct cdev cdev;
 	void __iomem *bar0;
@@ -45,7 +45,7 @@ struct monter_dev {
 struct monter_dev *monter_devices;
 
 struct monter_context {
-  struct monter_dev *dev;
+  struct monter_dev *mdev;
   void *data_area;
   dma_addr_t dma_handle;
   size_t data_size;
@@ -69,14 +69,14 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
 
 static void context_switch(struct monter_context *context) {
   uint32_t i, value, value_base = 1, dma_page_addr = ((uint32_t) context->dma_handle) >> 12;
+  printk(KERN_INFO "context_switch");
   printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
   for (i = 0; i < 16; ++i) {
     value = value_base + (i << 8) + ((dma_page_addr + i) << 12);
     printk(KERN_INFO "value: %u %u", i, value);
-    iowrite32(value, context->dev->bar0 + MONTER_FIFO_SEND);
+    iowrite32(value, context->mdev->bar0 + MONTER_FIFO_SEND);
   }
-  context->dev->current_context = context;
-  printk(KERN_INFO "context_switch");
+  context->mdev->current_context = context;
 }
 
 static long monter_ioctl(struct file*, unsigned int, unsigned long); // TODO remove
@@ -110,7 +110,7 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         printk(KERN_WARNING "ioctl size: %lu", size);
         return -EINVAL;
       }
-      context->data_area = dma_alloc_coherent(context->dev->dev, size, &context->dma_handle, GFP_KERNEL); // GFP_DMA32
+      context->data_area = dma_alloc_coherent(&context->mdev->pdev->dev, size, &context->dma_handle, GFP_KERNEL); // GFP_DMA32
       if (IS_ERR_OR_NULL(context->data_area)) {
         printk(KERN_WARNING "dma_alloc_coherent: %p, %llu", context->data_area, context->dma_handle);
         return PTR_ERR(context->data_area);
@@ -159,7 +159,7 @@ static int monter_open(struct inode *inode, struct file *filp) {
     printk(KERN_WARNING "kmalloc %d:%d", major, minor);
     return -ENOMEM;
   }
-  context->dev = monter_dev;
+  context->mdev = monter_dev;
   context->data_area = NULL;
   context->dma_handle = 0;
   context->data_size = 0;
@@ -249,7 +249,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
   iowrite32(3, monter_dev->bar0 + MONTER_RESET);
   iowrite32(7, monter_dev->bar0 + MONTER_INTR);
   iowrite32(7, monter_dev->bar0 + MONTER_INTR_ENABLE);
-  iowrite32(5, monter_dev->bar0 + MONTER_ENABLE);
+  iowrite32(1, monter_dev->bar0 + MONTER_ENABLE); // TODO zmaienić na 5 dla CMD
 
   reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
   printk(KERN_INFO "ENABLE1: %u", reg);
@@ -275,14 +275,14 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
 	// mutex_init
 
-  reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
-  printk(KERN_INFO "ENABLE2: %u", reg);
-  reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
-  printk(KERN_INFO "STATUS2: %u", reg);
-  reg = ioread32(monter_dev->bar0 + MONTER_INTR);
-  printk(KERN_INFO "INTR2: %u", reg);
-  reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
-  printk(KERN_INFO "INTR_ENABLE2: %u", reg);
+  // reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
+  // printk(KERN_INFO "ENABLE2: %u", reg);
+  // reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
+  // printk(KERN_INFO "STATUS2: %u", reg);
+  // reg = ioread32(monter_dev->bar0 + MONTER_INTR);
+  // printk(KERN_INFO "INTR2: %u", reg);
+  // reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
+  // printk(KERN_INFO "INTR_ENABLE2: %u", reg);
 
 	// iowrite32
 
@@ -307,14 +307,17 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	}
 
   monter_dev->current_context = NULL;
-  monter_dev->dev = device;
 	pci_set_drvdata(dev, monter_dev);
-	// reg = ioread32(baraddr);
-	// printk(KERN_INFO "ioread32: %ud", reg);
-	// iowrite32(0, baraddr);
-	// printk(KERN_INFO "iowrite32");
-	// reg = ioread32(baraddr);
-	// printk(KERN_INFO "ioread32: %ud", reg);
+
+  reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
+  printk(KERN_INFO "ENABLE2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_STATUS);
+  printk(KERN_INFO "STATUS2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_INFO "INTR2: %u", reg);
+  reg = ioread32(monter_dev->bar0 + MONTER_INTR_ENABLE);
+  printk(KERN_INFO "INTR_ENABLE2: %u", reg);
+
   printk(KERN_INFO "probe end");
   return 0;
 
