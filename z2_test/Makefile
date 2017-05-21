@@ -1,12 +1,12 @@
 TESTS = \
 		test-simple \
-		test-invalid \
-		test-mmap-later \
-		test-reuse-addr \
-		test-long-queue \
-		test-multi-context \
-		test-big-writes \
-		test-multi-device
+		# test-invalid \
+		# test-mmap-later \
+		# test-reuse-addr \
+		# test-long-queue \
+		# test-multi-context \
+		# test-big-writes \
+		# test-multi-device
 
 CFLAGS = -g
 LDFLAGS =

@@ -233,8 +233,8 @@ static int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
     printk(KERN_WARNING "monter_mmap state: %d", context->state);
   }
   vm_area->vm_ops = &monter_vm_ops; // ???
-  printk(KERN_INFO "mmap");
-  if (vm_area->vm_flags != (VM_READ | VM_WRITE | VM_SHARED)) {
+  printk(KERN_INFO "mmap: %lu %lu %lu %lu", vm_area->vm_flags, vm_area->vm_flags & VM_READ, vm_area->vm_flags & VM_WRITE, vm_area->vm_flags & VM_SHARED);
+  if ((vm_area->vm_flags & (VM_READ | VM_WRITE | VM_SHARED)) != 11) {
     printk(KERN_WARNING "vm_flags");
     return -EINVAL;
   }
