@@ -11,6 +11,10 @@
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
 #include <linux/spinlock.h>
+#include <asm/uaccess.h>
+#include <linux/errno.h>
+#include <linux/major.h>
+#include <linux/kernel.h>
 // #include <asm/memory.h>
 // #include <linux/mm.h>
 // #include <asm/atomic.h>
@@ -49,7 +53,7 @@ struct monter_context {
   void *data_area;
   dma_addr_t dma_handle;
   size_t data_size;
-  short state;
+  int state;
 };
 
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
@@ -67,7 +71,7 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
   return IRQ_HANDLED;
 }
 
-static void context_switch(struct monter_context *context) {
+static void switch_context(struct monter_context *context) {
   uint32_t i, value;
   printk(KERN_INFO "context_switch");
   printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
@@ -92,7 +96,7 @@ static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, lo
   dane = context->data_area;
   // monter_mmap()
   printk(KERN_INFO "AAA");
-  context_switch(filp->private_data);
+  switch_context(filp->private_data);
   printk(KERN_INFO "BBB: %p %p %llu", dane, context->data_area, context->dma_handle);
   // zlecenie operacji mnożenia
   *dane = 1;
@@ -114,10 +118,78 @@ static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, lo
   return 0;
 }
 
-static ssize_t monter_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos) {
-	printk(KERN_INFO "scull_write");
-	printk(KERN_WARNING "WRITE");
+static int send_addr_ab(struct monter_context *context, uint32_t data) {
+  uint32_t addr_a = MONTER_SWCMD_ADDR_A(data), addr_b = MONTER_SWCMD_ADDR_B(data);
+  uint32_t addr_ab = MONTER_CMD_ADDR_AB(addr_a, addr_b, 0);
+  // TODO jakaś walidacja? sprawdzenie zakresu
+  printk(KERN_INFO "send_addr_ab");
+  iowrite32(addr_ab, context->mdev->bar0 + MONTER_FIFO_SEND);
   return 0;
+}
+
+static int send_run_op(struct monter_context *context, uint32_t data, int mult_or_redc) {
+  uint32_t size_m1 = MONTER_SWCMD_RUN_SIZE(data), addr_d = MONTER_SWCMD_ADDR_D(data);
+  uint32_t run_op = 0;
+  printk(KERN_INFO "send_run_op: %d", mult_or_redc);
+  if (!(data & 0x1000)) {
+    printk(KERN_WARNING "send_run_op bit 17");
+    return -EINVAL;
+  }
+  if (mult_or_redc == 0) run_op = MONTER_SWCMD_RUN_MULT(size_m1, addr_d);
+  else if (mult_or_redc == 1) run_op = MONTER_SWCMD_RUN_REDC(size_m1, addr_d);
+  else {
+    printk(KERN_WARNING "send_run_op");
+    return -EINVAL;
+  }
+  iowrite32(run_op, context->mdev->bar0 + MONTER_FIFO_SEND);
+  return 0;
+}
+
+static ssize_t monter_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos) {
+  // TODO sprawdzić uprawnienia
+  // TODO czy nie poprawić - rozbić wczytywania na części, bufor na polecenia
+  struct monter_context *context = filp->private_data;
+  // long pos = filp->f_pos;
+  int ret;
+  unsigned long read;
+  uint32_t cmd, data;
+	printk(KERN_INFO "monter_write");
+  if (context->state != 1) {
+    printk(KERN_WARNING "monter_write state: %d", context->state);
+    return -EINVAL;
+  }
+  if (!(count % 4)) {
+    printk(KERN_WARNING "monter_write count: %lu", count);
+    return -EINVAL;
+  }
+  if (filp->f_pos == count) return 0;
+  read = copy_from_user(&data, buf, 4);
+  if (read) {
+    printk(KERN_WARNING "copy_from_user: %lu", read);
+    return -EINVAL;
+  }
+  *f_pos = filp->f_pos + 4;
+  if (context->mdev->current_context != context) {
+    switch_context(context);
+  }
+  cmd = MONTER_SWCMD_TYPE(data);
+  switch (cmd) {
+    case MONTER_SWCMD_TYPE_ADDR_AB:
+      ret = send_addr_ab(context, data);
+      if (ret) return ret;
+      break;
+    case MONTER_SWCMD_TYPE_RUN_MULT:
+      ret = send_run_op(context, data, 0); // TODO dodać makra? na MULT I REDC
+      if (ret) return ret;
+      break;
+    case MONTER_SWCMD_TYPE_RUN_REDC:
+      ret = send_run_op(context, data, 1);
+      if (ret) return ret;
+      break;
+    default:
+      return -EINVAL;
+  }
+  return 4;
 }
 
 static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
@@ -157,6 +229,9 @@ static int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
   unsigned long size = vm_area->vm_end - vm_area->vm_start;
   // unsigned long pfn = virt_to_pfn(context->data_area);
   unsigned long pfn = virt_to_phys(context->data_area) >> PAGE_SHIFT;
+  if (context->state != 1) {
+    printk(KERN_WARNING "monter_mmap state: %d", context->state);
+  }
   vm_area->vm_ops = &monter_vm_ops; // ???
   printk(KERN_INFO "mmap");
   if (vm_area->vm_flags != (VM_READ | VM_WRITE | VM_SHARED)) {
