@@ -57,7 +57,7 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
   uint32_t intr;
 
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
-  printk(KERN_INFO "interrupt request %ud", intr);
+  printk(KERN_INFO "interrupt request %u", intr);
   // printk(KERN_WARNING "interrupt request %ud", intr);
   if (!intr) {
     return IRQ_NONE;
@@ -67,9 +67,25 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
   return IRQ_HANDLED;
 }
 
+static void context_switch(struct monter_context *context) {
+  uint32_t i, value, value_base = 1, dma_page_addr = ((uint32_t) context->dma_handle) >> 12;
+  printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
+  for (i = 0; i < 16; ++i) {
+    value = value_base + (i << 8) + ((dma_page_addr + i) << 12);
+    printk(KERN_INFO "value: %u %u", i, value);
+    iowrite32(value, context->dev->bar0 + MONTER_FIFO_SEND);
+  }
+  context->dev->current_context = context;
+  printk(KERN_INFO "context_switch");
+}
+
+static long monter_ioctl(struct file*, unsigned int, unsigned long); // TODO remove
+
 static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 	printk(KERN_INFO "monter_read");
-	printk(KERN_WARNING "READ");
+  monter_ioctl(filp, MONTER_IOCTL_SET_SIZE, 65536);
+  // monter_mmap()
+  context_switch(filp->private_data);
   return 0;
 }
 
@@ -94,11 +110,12 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         printk(KERN_WARNING "ioctl size: %lu", size);
         return -EINVAL;
       }
-      context->data_area = dma_alloc_coherent(context->dev->dev, size, &context->dma_handle, GFP_DMA32);
-      if (IS_ERR(context->data_area)) {
-        printk(KERN_WARNING "dma_alloc_coherent");
+      context->data_area = dma_alloc_coherent(context->dev->dev, size, &context->dma_handle, GFP_KERNEL); // GFP_DMA32
+      if (IS_ERR_OR_NULL(context->data_area)) {
+        printk(KERN_WARNING "dma_alloc_coherent: %p, %llu", context->data_area, context->dma_handle);
         return PTR_ERR(context->data_area);
       }
+      printk(KERN_INFO "dma_handle ioctl: %llu, %p", context->dma_handle, context->data_area);
       context->data_size = size;
       context->state = 1;
       return 0;
@@ -130,7 +147,6 @@ static int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
 }
 
 static int monter_open(struct inode *inode, struct file *filp) {
-  long ret;
   int major = MAJOR(inode->i_rdev), minor = MINOR(inode->i_rdev);
   struct monter_dev *monter_dev;
   struct monter_context *context;
@@ -148,7 +164,7 @@ static int monter_open(struct inode *inode, struct file *filp) {
   context->dma_handle = 0;
   context->data_size = 0;
   context->state = 0;
-  monter_dev->current_context = context;
+  monter_dev->current_context = NULL; // context
   // u->mode = -1;
   filp->private_data = context;
 
@@ -166,7 +182,8 @@ static int monter_release(struct inode *inode, struct file *filp) {
   struct monter_context *context = filp->private_data;
 
 	printk(KERN_INFO "monter_release");
-	printk(KERN_WARNING "RELEASE");
+	// printk(KERN_WARNING "RELEASE");
+  // zwalnianie dma_alloc_coherent
   kfree(context);
 	return 0;
 }
