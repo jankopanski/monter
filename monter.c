@@ -131,17 +131,18 @@ static int send_run_op(struct monter_context *context, uint32_t data, int mult_o
   uint32_t size_m1 = MONTER_SWCMD_RUN_SIZE(data), addr_d = MONTER_SWCMD_ADDR_D(data);
   uint32_t run_op = 0;
   printk(KERN_INFO "send_run_op: %d", mult_or_redc);
-  if (!(data & 0x1000)) {
+  if (data & 0x1000) {
     printk(KERN_WARNING "send_run_op bit 17");
     return -EINVAL;
   }
-  if (mult_or_redc == 0) run_op = MONTER_SWCMD_RUN_MULT(size_m1, addr_d);
-  else if (mult_or_redc == 1) run_op = MONTER_SWCMD_RUN_REDC(size_m1, addr_d);
+  if (mult_or_redc == 0) run_op = MONTER_CMD_RUN_MULT(size_m1, addr_d, 0);
+  else if (mult_or_redc == 1) run_op = MONTER_CMD_RUN_REDC(size_m1, addr_d, 0);
   else {
     printk(KERN_WARNING "send_run_op");
     return -EINVAL;
   }
   iowrite32(run_op, context->mdev->bar0 + MONTER_FIFO_SEND);
+  printk(KERN_INFO "send_run_op end");
   return 0;
 }
 
@@ -158,21 +159,25 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     printk(KERN_WARNING "monter_write state: %d", context->state);
     return -EINVAL;
   }
-  if (!(count % 4)) {
+  if (count % 4) {
     printk(KERN_WARNING "monter_write count: %lu", count);
     return -EINVAL;
   }
-  if (filp->f_pos == count) return 0;
+  printk(KERN_INFO "monter_write before count check: %lld %lu", filp->f_pos, count);
+  // if (filp->f_pos == count) return 0;
+  printk(KERN_INFO "monter_write before copy");
   read = copy_from_user(&data, buf, 4);
   if (read) {
     printk(KERN_WARNING "copy_from_user: %lu", read);
     return -EINVAL;
   }
   *f_pos = filp->f_pos + 4;
+  printk(KERN_INFO "monter_write before context switch");
   if (context->mdev->current_context != context) {
     switch_context(context);
   }
   cmd = MONTER_SWCMD_TYPE(data);
+  printk(KERN_INFO "monter_write brfore cmd switch");
   switch (cmd) {
     case MONTER_SWCMD_TYPE_ADDR_AB:
       ret = send_addr_ab(context, data);
@@ -189,6 +194,7 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     default:
       return -EINVAL;
   }
+  printk(KERN_INFO "monter_write end: %u", cmd);
   return 4;
 }
 
