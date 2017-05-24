@@ -30,6 +30,8 @@ MODULE_LICENSE("GPL");
 #define MONTER_MAX_COUNT 256
 #define MONTER_MAX_PAGE_NUM 16
 #define MONTER_MAX_SIZE (MONTER_MAX_PAGE_NUM * PAGE_SIZE)
+#define MONTER_MULT 0
+#define MONTER_REDC 1
 
 static struct class *monter_class = NULL;
 dev_t dev_base = 0; // zakodowany major + minor
@@ -49,12 +51,19 @@ struct monter_dev *monter_devices;
 
 struct monter_context {
   struct monter_dev *mdev;
+  struct mutex finish;
   void *kern_pages[MONTER_MAX_PAGE_NUM];
   dma_addr_t dma_pages[MONTER_MAX_PAGE_NUM];
   size_t page_num, size;
   int state, operation;
   uint32_t addr_a, addr_b;
 };
+
+/* state
+0 - before ioctl
+1 - after ioctl, ready for mmap
+2 - finished last operation
+*/
 
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
   struct monter_dev *monter_dev = dev;
@@ -66,7 +75,8 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
     return IRQ_NONE;
   }
   iowrite32(intr, monter_dev->bar0 + MONTER_INTR);
-
+  // monter_dev->current_context->state = 2;
+  mutex_unlock(&monter_dev->current_context->finish);
   return IRQ_HANDLED;
 }
 
@@ -135,7 +145,7 @@ static int parse_run_op(struct monter_context *context, uint32_t *cmd_ptr, int m
     context->addr_b + size_m1, context->size);
     return -EINVAL;
   }
-  if (mult_or_redc == 0) {
+  if (mult_or_redc == MONTER_MULT) {
     if (context->addr_a + size_m1 >= context->size) {
       printk(KERN_ALERT "number under A address is outside of data area: %u %lu",
       context->addr_a + size_m1, context->size);
@@ -143,7 +153,7 @@ static int parse_run_op(struct monter_context *context, uint32_t *cmd_ptr, int m
     }
     run_op = MONTER_CMD_RUN_MULT(size_m1, addr_d, 0); // TODO NOTYFY
   }
-  else if (mult_or_redc == 1) {
+  else if (mult_or_redc == MONTER_REDC) {
     run_op = MONTER_CMD_RUN_REDC(size_m1, addr_d, 0);
   }
   else {
@@ -254,7 +264,6 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   cmd_num = count / 4;
   printk(KERN_INFO "monter_write before for loop %p %p %u", cmd_ptr, data, *cmd_ptr);
   for (i = 0; i < cmd_num; ++i) {
-    // user_cmd = *cmd_ptr;
     cmd_type = MONTER_SWCMD_TYPE(*cmd_ptr);
     printk(KERN_INFO "monter_write for iter %u %u", i, cmd_type);
     switch (cmd_type) {
@@ -273,7 +282,7 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
           ret = -EINVAL;
           goto fail;
         };
-        ret = parse_run_op(context, cmd_ptr, 0); // TODO dodać makra? na MULT I REDC
+        ret = parse_run_op(context, cmd_ptr, MONTER_MULT); // TODO dodać makra? na MULT I REDC
         if (ret) {
           printk(KERN_ALERT "parse_run_op MULT");
           goto fail;
@@ -285,7 +294,7 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
           ret = -EINVAL;
           goto fail;
         };
-        ret = parse_run_op(context, cmd_ptr, 1);
+        ret = parse_run_op(context, cmd_ptr, MONTER_REDC);
         if (ret) {
           printk(KERN_ALERT "parse_run_op REDC");
           goto fail;
@@ -301,14 +310,16 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   }
   printk(KERN_INFO "monter_write before context switch: %p %p", context->mdev->current_context, context);
   if (context->mdev->current_context != context) {
-    printk(KERN_ALERT "DOING CONTEXT SWITCH");
+    printk(KERN_INFO "DOING CONTEXT SWITCH");
     switch_context(context);
   }
-  // data[cmd_num] = MONTER_CMD_ADDR_AB(0, 0, 1);
+  data[cmd_num] = MONTER_CMD_COUNTER(0, 1);
   printk(KERN_INFO "before send_commands");
-  send_commands(context, data, cmd_num);
+  send_commands(context, data, cmd_num + 1);
   // kfree(data); TODO zwalnianie pamięci
+  mutex_lock(&context->finish);
   printk(KERN_INFO "monter_write end");
+  kfree(data);
   return count;
 fail:
   printk(KERN_INFO "monter_write fail");
@@ -316,9 +327,8 @@ fail:
   return ret;
 }
 
-static int monter_fsync(struct file *file, loff_t start, loff_t end,
-			  int datasync) {
-  msleep(1000);
+static int monter_fsync(struct file *file, loff_t start, loff_t end, int datasync) {
+  // msleep(1000);
   return 0;
 }
 
@@ -344,6 +354,7 @@ static int monter_open(struct inode *inode, struct file *filp) {
   context->state = 0;
   context->operation = 0;
   monter_dev->current_context = NULL;
+  mutex_init(&context->finish);
   filp->private_data = context;
   return 0;
 }
