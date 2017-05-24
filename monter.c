@@ -53,21 +53,18 @@ struct monter_dev *monter_devices;
 
 struct monter_context {
   struct monter_dev *mdev;
-  void *data_area;
   void *kern_pages[16];
-  dma_addr_t dma_handle;
   dma_addr_t dma_pages[16];
-  size_t data_size;
+  size_t page_num;
   int state;
 };
 
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
   struct monter_dev *monter_dev = dev;
   uint32_t intr;
-
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
+  printk(KERN_ALERT "INTR NOTYFY");
   printk(KERN_INFO "interrupt request %u", intr);
-  // printk(KERN_WARNING "interrupt request %ud", intr);
   if (!intr) {
     return IRQ_NONE;
   }
@@ -76,22 +73,9 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
   return IRQ_HANDLED;
 }
 
-// static void switch_context(struct monter_context *context) {
-//   uint32_t i, value;
-//   printk(KERN_INFO "context_switch");
-//   printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
-//   for (i = 0; i < 16; ++i) {
-//     value = MONTER_CMD_PAGE(i, MONTER_CMD_PAGE_ADDR(context->dma_handle + i * 4096), 0);
-//     printk(KERN_INFO "value: %u %u", i, value);
-//     iowrite32(value, context->mdev->bar0 + MONTER_FIFO_SEND);
-//   }
-//   context->mdev->current_context = context;
-// }
-
 static void switch_context(struct monter_context *context) {
   uint32_t i, value;
   printk(KERN_INFO "context_switch");
-  printk(KERN_INFO "dma_handle context_switch: %llu", context->dma_handle);
   for (i = 0; i < 16; ++i) {
     value = MONTER_CMD_PAGE(i, MONTER_CMD_PAGE_ADDR(context->dma_pages[i]), 0);
     printk(KERN_INFO "value: %u %u", i, value);
@@ -100,40 +84,8 @@ static void switch_context(struct monter_context *context) {
   context->mdev->current_context = context;
 }
 
-static long monter_ioctl(struct file*, unsigned int, unsigned long); // TODO remove
-static int monter_mmap(struct file *, struct vm_area_struct *);
-
-// static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
-//   struct monter_context *context = filp->private_data;
-//   // uint32_t *dane = (uint32_t*)1018036224;//(uint32_t*)context->dma_handle;
-//   uint32_t *dane = NULL;
-//   uint32_t addr, run, status1, status2;
-// 	printk(KERN_INFO "monter_read");
-//   monter_ioctl(filp, MONTER_IOCTL_SET_SIZE, 65536);
-//   dane = context->data_area;
-//   // monter_mmap()
-//   printk(KERN_INFO "AAA");
-//   switch_context(filp->private_data);
-//   printk(KERN_INFO "BBB: %p %p %llu", dane, context->data_area, context->dma_handle);
-//   // zlecenie operacji mnożenia
-//   *dane = 1;
-//   *(dane + 1) = 2;
-//   printk(KERN_INFO "CCC");
-//   // addr = MONTER_CMD_ADDR_AB(dane, dane + 1, 0);
-//   // run = MONTER_CMD_RUN_MULT(0, dane + 2, 0);
-//   status1 = ioread32(context->mdev->bar0 + MONTER_STATUS);
-//   printk(KERN_INFO "MULT STATUS1: %u", status1);
-//   addr = MONTER_CMD_ADDR_AB(context->dma_handle, context->dma_handle + 4, 0);
-//   run = MONTER_CMD_RUN_MULT(0, context->dma_handle + 8, 0);
-//   iowrite32(addr, context->mdev->bar0 + MONTER_FIFO_SEND);
-//   iowrite32(run, context->mdev->bar0 + MONTER_FIFO_SEND);
-//   status2 = ioread32(context->mdev->bar0 + MONTER_STATUS);
-//   printk(KERN_INFO "MULT STATUS2: %u", status2);
-//   // wait
-//   // ioread32();
-//   printk(KERN_INFO "MULT monter_read: %u, %u", addr, run);
-//   return 0;
-// }
+// static long monter_ioctl(struct file*, unsigned int, unsigned long); // TODO remove
+// static int monter_mmap(struct file *, struct vm_area_struct *);
 
 static ssize_t monter_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
   // struct monter_context *context = filp->private_data;
@@ -163,7 +115,7 @@ static int send_run_op(struct monter_context *context, uint32_t data, int mult_o
     printk(KERN_WARNING "send_run_op bit 17");
     return -EINVAL;
   }
-  if (mult_or_redc == 0) run_op = MONTER_CMD_RUN_MULT(size_m1, addr_d, 0);
+  if (mult_or_redc == 0) run_op = MONTER_CMD_RUN_MULT(size_m1, addr_d, 1); // NOTYFY
   else if (mult_or_redc == 1) run_op = MONTER_CMD_RUN_REDC(size_m1, addr_d, 0);
   else {
     printk(KERN_WARNING "send_run_op");
@@ -182,6 +134,16 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   int ret;
   unsigned long read;
   uint32_t cmd, data;
+  // char *mem = (char*)context->kern_pages[1];
+  // mem[0] = 'z';
+  // mem[1] = 'x';
+  // mem[2] = 'y';
+  // mem[3] = 'v';
+  // mem[4] = 'w';
+  // mem[5] = 'u';
+  // mem[4608] = 'a';
+  // mem[4609] = 'l';
+  // mem[4610] = 'a';
 	printk(KERN_INFO "monter_write");
   if (context->state != 1) {
     printk(KERN_WARNING "monter_write state: %d", context->state);
@@ -231,8 +193,8 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
   size_t size = (size_t) arg;
   struct monter_context *context = filp->private_data;
   unsigned i;
+  char *mem;
   printk(KERN_INFO "monter_ioctl");
-  // void *data_area;
   switch (cmd) {
     case MONTER_IOCTL_SET_SIZE:
       if (context->state) {
@@ -243,71 +205,32 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         printk(KERN_WARNING "ioctl size: %lu", size);
         return -EINVAL;
       }
-      for (i = 0; i < size / 4096; ++i) {
-        context->kern_pages[i] = dma_alloc_coherent(&context->mdev->pdev->dev, 4096, &(context->dma_pages[i]), GFP_KERNEL);
+      context->page_num = size / PAGE_SIZE;
+      for (i = 0; i < context->page_num; ++i) {
+        context->kern_pages[i] = dma_alloc_coherent(&context->mdev->pdev->dev, 4096, &(context->dma_pages[i]), GFP_KERNEL); // TODO PAGE_SIZE
         printk(KERN_INFO "dma_alloc_coherent pages: %p, %llu", context->kern_pages[i], context->dma_pages[i]);
+        if (IS_ERR_OR_NULL(context->kern_pages[i])) {
+          printk(KERN_WARNING "dma_alloc_coherent: %p, %llu", context->kern_pages[i], context->dma_pages[i]);
+          return PTR_ERR(context->kern_pages[i]); // TODO inny błąd
+        }
       }
-      // context->data_area = dma_alloc_coherent(&context->mdev->pdev->dev, 4096/*size*/, &context->dma_handle, GFP_KERNEL); // GFP_DMA32 // TODO size
-      // if (IS_ERR_OR_NULL(context->data_area)) {
-      //   printk(KERN_WARNING "dma_alloc_coherent: %p, %llu", context->data_area, context->dma_handle);
-      //   return PTR_ERR(context->data_area);
-      // }
-      // printk(KERN_INFO "dma_handle ioctl: %llu, %p", context->dma_handle, context->data_area);
-      context->data_size = size;
+      mem = (char*)context->kern_pages[1];
+      mem[0] = 'A';
+      mem[1] = 'b';
+      mem[2] = 'c';
+      mem[3] = 'd';
+      mem[4] = 'e';
+      mem[5] = 'f';
+      // mem[4608] = 'a';
+      // mem[4609] = 'l';
+      // mem[4610] = 'a';
+      printk(KERN_INFO "WRITE MEM TO %p", mem);
       context->state = 1;
       return 0;
     default:
       return -ENOTTY;
   }
 }
-
-// static const struct vm_operations_struct monter_vm_ops = { }; // fault
-//
-// static int monter_mmap(struct file *flip, struct vm_area_struct *vm_area) {
-//   long ret;
-//   struct monter_context *context = flip->private_data;
-//   unsigned long size = vm_area->vm_end - vm_area->vm_start;
-//   // unsigned long pfn = virt_to_pfn(context->data_area);
-//   unsigned long pfn = virt_to_phys(context->data_area) >> PAGE_SHIFT;
-//   if (context->state != 1) {
-//     printk(KERN_WARNING "monter_mmap state: %d", context->state);
-//   }
-//   vm_area->vm_ops = &monter_vm_ops; // ???
-//   printk(KERN_INFO "mmap: %lu %lu %lu %lu", vm_area->vm_flags, vm_area->vm_flags & VM_READ, vm_area->vm_flags & VM_WRITE, vm_area->vm_flags & VM_SHARED);
-//   if ((vm_area->vm_flags & (VM_READ | VM_WRITE | VM_SHARED)) != 11) {
-//     printk(KERN_WARNING "vm_flags");
-//     return -EINVAL;
-//   } // vm_insert_page
-//   // vm_area->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
-//   // vm_area->vm_page_prot = pgprot_noncached(vm_area->vm_page_prot);
-//   ret = remap_pfn_range(vm_area, vm_area->vm_start, pfn, size, vm_area->vm_page_prot);
-//   if (IS_ERR_VALUE(ret)) {
-//     printk(KERN_WARNING "remap_pfn_range");
-//     return ret;
-//   }
-//   return 0;
-// }
-
-// static int monter_mmap(struct file *flip, struct vm_area_struct *vma) {
-//   struct monter_context *context = flip->private_data;
-//   struct page *page;
-//   unsigned long page_num = context->data_size / PAGE_SIZE; // TODO sprawdzenia dla page_num
-//   unsigned long i, user_addr;
-//   char *kern_addr;
-//   long ret;
-//   for (i = 0; i < page_num; ++i) {
-//     user_addr = vma->vm_start + i * PAGE_SIZE;
-//     kern_addr = ((char*)context->data_area) + i * PAGE_SIZE;
-//     page = virt_to_page(kern_addr);
-//     ret = vm_insert_page(vma, user_addr, page);
-//     printk(KERN_INFO "monter_mmap: %ld", ret);
-//     if (IS_ERR_VALUE(ret)) {
-//       printk(KERN_WARNING "vm_insert_page");
-//       return ret;
-//     }
-//   }
-//   return 0;
-// }
 
 #ifndef VM_RESERVED
 # define  VM_RESERVED   (VM_DONTEXPAND | VM_DONTDUMP)
@@ -316,19 +239,12 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static int monter_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf) {
   struct monter_context *context = vma->vm_private_data;
   struct page *page;
-  unsigned page_num = vmf->pgoff;// / 4096;//
-  // unsigned long user_addr;
-  // char *kern_addr;
+  unsigned page_num = vmf->pgoff;
   long ret;
   printk(KERN_INFO "MONTER FAULT: %p %llu", context->kern_pages[page_num], context->dma_pages[page_num]);
-  // user_addr = vma->vm_start + vmf->pgoff;
-  // kern_addr = ((char*)context->data_area) + vmf->pgoff;
-  // page = virt_to_page(kern_addr);
-  // printk(KERN_INFO "monter_mmap_fault %lu %p %lu", user_addr, kern_addr, vmf->pgoff);
-  // ret = vm_insert_page(vma, user_addr, page);
   page = virt_to_page(context->kern_pages[page_num]);
   ret = vm_insert_page(vma, vma->vm_start + (page_num << PAGE_SHIFT), page);
-  printk(KERN_INFO "monter_fault: %ld", ret);
+  printk(KERN_INFO "monter_fault vm_insert_page: %ld %lu %lu %u %s", ret, vma->vm_start, vma->vm_start + (page_num << PAGE_SHIFT), page_num, (char*)context->kern_pages[page_num]);
   if (IS_ERR_VALUE(ret)) {
     printk(KERN_WARNING "vm_insert_page");
     // return ret;
@@ -350,13 +266,18 @@ static int monter_mmap(struct file *flip, struct vm_area_struct *vma) {
   return 0;
 }
 
+static int monter_fsync(struct file *file, loff_t start, loff_t end,
+			  int datasync) {
+  msleep(1000);
+  return 0;
+}
+
 static int monter_open(struct inode *inode, struct file *filp) {
   int major = MAJOR(inode->i_rdev), minor = MINOR(inode->i_rdev);
   struct monter_dev *monter_dev;
   struct monter_context *context;
   int i;
   printk(KERN_INFO "monter_open");
-
   monter_dev = container_of(inode->i_cdev, struct monter_dev, cdev);
   context = kmalloc(sizeof(struct monter_context), GFP_KERNEL);
   if (!context) {
@@ -364,40 +285,23 @@ static int monter_open(struct inode *inode, struct file *filp) {
     return -ENOMEM;
   }
   context->mdev = monter_dev;
-  for (i = 0; i < 16; ++i) {
+  for (i = 0; i < 16; ++i) { // TODO MAX PAGE NUM
     context->kern_pages[i] = NULL;
     context->dma_pages[i] = 0;
   }
-  // context->data_area = NULL;
-  // context->dma_handle = 0;
-  // context->data_size = 0;
+  context->page_num = 0;
   context->state = 0;
-  monter_dev->current_context = NULL; // context
-  // u->mode = -1;
+  monter_dev->current_context = NULL;
   filp->private_data = context;
-
   return 0;
-	// dev_t devno = inode->i_rdev; // adresować urządzenie po minor
-	// int major = MAJOR(devno), minor = MINOR(devno);
-	// struct cdev cdev = *(inode->i_cdev); // blackbox?
-	// int mod = (int)filp->f_mode;
-	// printk(KERN_WARNING "OPEN");
-	// printk(KERN_INFO "major: %d, minor: %d, mod: %d", major, minor, mod);
-  // return 0;
 }
 
 static int monter_release(struct inode *inode, struct file *filp) {
   struct monter_context *context = filp->private_data;
   int i;
-
 	printk(KERN_INFO "monter_release");
-  // msleep(100000);
-	// printk(KERN_WARNING "RELEASE");
-  // zwalnianie dma_alloc_coherent
   if (context->state) {
-    // dma_free_coherent(&context->mdev->pdev->dev, context->data_size,
-    //   context->data_area, context->dma_handle);
-    for (i = 0; i < 16; ++i) {
+    for (i = 0; i < context->page_num; ++i) {
       if (context->kern_pages[i]) {
         dma_free_coherent(&context->mdev->pdev->dev, 4096, context->kern_pages[i], context->dma_pages[i]);
       }
@@ -407,7 +311,6 @@ static int monter_release(struct inode *inode, struct file *filp) {
 	return 0;
 }
 
-// release - close
 struct file_operations monter_fops = {
   .owner = THIS_MODULE,
   .read = monter_read,
@@ -416,7 +319,7 @@ struct file_operations monter_fops = {
   .mmap = monter_mmap,
   .open = monter_open,
   .release = monter_release,
-  //.fsync = monter_fsync,
+  .fsync = monter_fsync,
 };
 
 static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {

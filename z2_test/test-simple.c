@@ -56,6 +56,12 @@ int main(int argc, char **argv) {
     fread(data, INPUT_DATA_SIZE, 1, input);
     fclose(input);
 
+    // data[0] = 'a';
+    // data[1] = 'b';
+    // data[2] = 'c';
+    // data[4500] = 'd';
+    // monter_print_data(data, 5000);
+    // monter_print_data(data, 16000);
     for (i = 0; i < sizeof(cmd)/sizeof(*cmd); i++)
         if (monter_write_single(fd, cmd[i]) != 4) {
             fprintf(stderr, "cmd %d failed: %s\n", i, strerror(errno));

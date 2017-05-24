@@ -1,6 +1,6 @@
 TESTS = \
 		test-simple \
-		# test-invalid \
+		test-invalid \
 		# test-mmap-later \
 		# test-reuse-addr \
 		# test-long-queue \
