@@ -6,6 +6,7 @@
 
 int main(int argc, char **argv) {
     int fd, i;
+    int ret;
     uint32_t cmd;
     char *data;
     uint32_t cmds[4];
@@ -84,7 +85,7 @@ int main(int argc, char **argv) {
     cmds[0] = MONTER_SWCMD_ADDR_AB(0, 64);
     cmds[1] = MONTER_SWCMD_RUN_MULT(64, 128);
     cmds[2] = 0x7; /* invalid cmd */
-    switch (write(fd, cmds, 12)) {
+    switch (ret = write(fd, cmds, 12)) {
         case -1:
             if (errno != EINVAL) {
                 fprintf(stderr, "Command should be rejected with EINVAL(%d), not %d\n", EINVAL, errno);
@@ -105,6 +106,7 @@ int main(int argc, char **argv) {
             }
             break;
         default:
+            fprintf(stderr, "%d\n", ret);
             fprintf(stderr, "either the whole buffer should be rejected, or just the invalid command\n");
             exit(1);
     }
