@@ -23,6 +23,7 @@
 #include "monter_ioctl.h"
 
 #include <linux/delay.h>
+#include <linux/spinlock.h>
 
 MODULE_AUTHOR("Jan Kopański");
 MODULE_LICENSE("GPL");
@@ -38,6 +39,9 @@ dev_t dev_base = 0; // zakodowany major + minor
 int monter_major = 0;
 static DEFINE_IDR(monter_idr);
 
+// spinlock_t xxx_lock = SPIN_LOCK_UNLOCKED;
+// unsigned long flags;
+
 struct monter_dev {
   // być może będzie trzeba dodać current_context dla funkcji obsługi przerwań
   // struct device *dev; // class, pole dev wewnątrz pdev
@@ -45,6 +49,7 @@ struct monter_dev {
   struct cdev cdev;
 	void __iomem *bar0;
   struct monter_context *current_context;
+  spinlock_t slock;
 };
 
 struct monter_dev *monter_devices;
@@ -68,15 +73,20 @@ struct monter_context {
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
   struct monter_dev *monter_dev = dev;
   uint32_t intr;
+  unsigned long flags;
+  spin_lock_irqsave(&monter_dev->slock, flags);
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
   // printk(KERN_ALERT "INTR NOTYFY");
   printk(KERN_INFO "interrupt request %u", intr);
   if (!intr) {
+    spin_unlock_irqrestore(&monter_dev->slock, flags);
     return IRQ_NONE;
   }
   iowrite32(intr, monter_dev->bar0 + MONTER_INTR);
-  // monter_dev->current_context->state = 2;
   mutex_unlock(&monter_dev->current_context->finish);
+  spin_unlock_irqrestore(&monter_dev->slock, flags);
+  // monter_dev->current_context->state = 2;
+  printk(KERN_INFO "interrupt request end");
   return IRQ_HANDLED;
 }
 
@@ -317,9 +327,12 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   printk(KERN_INFO "before send_commands");
   send_commands(context, data, cmd_num + 1);
   // kfree(data); TODO zwalnianie pamięci
-  mutex_lock(&context->finish);
+  mutex_lock(&context->finish); // TODO zmienić rodzaj locka na nieblokujący przerwać kill
   printk(KERN_INFO "monter_write end");
+  // msleep(100);
   kfree(data);
+  cmd_type = ioread32(context->mdev->bar0 + MONTER_STATUS);
+  printk(KERN_ALERT "%u", cmd_type);
   return count;
 fail:
   printk(KERN_INFO "monter_write fail");
@@ -327,8 +340,14 @@ fail:
   return ret;
 }
 
-static int monter_fsync(struct file *file, loff_t start, loff_t end, int datasync) {
+static int monter_fsync(struct file *filp, loff_t start, loff_t end, int datasync) {
+  uint32_t u;
+  struct monter_context *context = filp->private_data;
+
   // msleep(1000);
+
+  u = ioread32(context->mdev->bar0 + MONTER_STATUS);
+  printk(KERN_ALERT "FSYNC %u", u);
   return 0;
 }
 
@@ -451,6 +470,8 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     printk(KERN_ALERT "dma_set_mask_and_coherent");
     goto err_dma_mask;
   }
+
+  spin_lock_init(&monter_dev->slock); // TODO dodane
 
 	ret = request_irq(dev->irq, monter_irq_handler, IRQF_SHARED, "monter", monter_dev);
   if (IS_ERR_VALUE(ret)) {
