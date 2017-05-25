@@ -1,9 +1,9 @@
 TESTS = \
 		test-simple \
-		test-invalid \
-		test-mmap-later \
-		test-reuse-addr \
-# 		test-long-queue \
+		# test-invalid \
+		# test-mmap-later \
+		# test-reuse-addr \
+		# test-long-queue \
 # 		test-multi-context \
 # 		test-big-writes \
 # 		test-multi-device
