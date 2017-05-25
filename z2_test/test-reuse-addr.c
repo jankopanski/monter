@@ -62,10 +62,10 @@ int main(int argc, char **argv) {
     monter_write_single_checked(fd, MONTER_SWCMD_ADDR_AB(SZ * 0, SZ * 1), "MONTER_SWCMD_ADDR_AB");
     monter_write_single_checked(fd, MONTER_SWCMD_RUN_MULT(SZ / 4, SZ * 2), "MONTER_SWCMD_RUN_MULT 1");
     fsync(fd);
-    // fread(data, SZ, 2, input);
+    fread(data, SZ, 2, input);
     // fread(data + 2 * SZ, SZ, 2, input);
     // monter_print_data(data  , 2 * SZ);
-    // monter_write_single_checked(fd, MONTER_SWCMD_RUN_MULT(SZ / 4, SZ * 4), "MONTER_SWCMD_RUN_MULT 2");
+    monter_write_single_checked(fd, MONTER_SWCMD_RUN_MULT(SZ / 4, SZ * 4), "MONTER_SWCMD_RUN_MULT 2");
     fclose(input);
 
     fsync(fd);

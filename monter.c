@@ -49,6 +49,7 @@ struct monter_dev {
   struct cdev cdev;
 	void __iomem *bar0;
   struct monter_context *current_context;
+  struct mutex write_mutex;
   spinlock_t slock;
 };
 
@@ -60,8 +61,10 @@ struct monter_context {
   void *kern_pages[MONTER_MAX_PAGE_NUM];
   dma_addr_t dma_pages[MONTER_MAX_PAGE_NUM];
   size_t page_num, size;
-  int state, operation;
+  int state, operation, write_finished;
   uint32_t addr_a, addr_b;
+  struct semaphore sem;
+  // wait_queue_head_t write_queue;
 };
 
 /* state
@@ -73,17 +76,24 @@ struct monter_context {
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
   struct monter_dev *monter_dev = dev;
   uint32_t intr;
+  uint32_t stat;
   unsigned long flags;
   spin_lock_irqsave(&monter_dev->slock, flags);
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
+  stat = ioread32(monter_dev->bar0 + MONTER_STATUS);
   // printk(KERN_ALERT "INTR NOTYFY");
   printk(KERN_INFO "interrupt request %u", intr);
+  printk(KERN_INFO "intr status %u", stat);
   if (!intr) {
     spin_unlock_irqrestore(&monter_dev->slock, flags);
     return IRQ_NONE;
   }
   iowrite32(intr, monter_dev->bar0 + MONTER_INTR);
-  mutex_unlock(&monter_dev->current_context->finish);
+  printk(KERN_INFO "write_finished %d", monter_dev->current_context->write_finished);
+  // monter_dev->current_context->write_finished = 1;
+  // mutex_unlock(&monter_dev->current_context->finish);
+  up(&monter_dev->current_context->sem); //TODO
+  printk(KERN_INFO "SOME CODE");
   spin_unlock_irqrestore(&monter_dev->slock, flags);
   // monter_dev->current_context->state = 2;
   printk(KERN_INFO "interrupt request end");
@@ -246,18 +256,23 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   uint32_t cmd_type;//, user_cmd, driver_cmd;
   uint32_t *data, *cmd_ptr;
   unsigned i, cmd_num;
+  mutex_lock(&(context->mdev->write_mutex));
+  context->write_finished = 2;
 	printk(KERN_INFO "monter_write");
   if (context->state != 1) {
     printk(KERN_ALERT "monter_write state: %d", context->state);
+    mutex_unlock(&(context->mdev->write_mutex));
     return -EINVAL;
   }
   if (count % 4) {
     printk(KERN_ALERT "monter_write count: %lu", count);
+    mutex_unlock(&(context->mdev->write_mutex));
     return -EINVAL;
   }
   data = kmalloc(count + 4, GFP_KERNEL);
   if (!data) {
     printk(KERN_ALERT "monter_write data allocation");
+    mutex_unlock(&(context->mdev->write_mutex));
     return -EINVAL; // TODO inny return code
   }
   printk(KERN_INFO "monter_write before copy_from_user: %lld %lu", filp->f_pos, count);
@@ -326,17 +341,21 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   data[cmd_num] = MONTER_CMD_COUNTER(0, 1);
   printk(KERN_INFO "before send_commands");
   send_commands(context, data, cmd_num + 1);
-  // kfree(data); TODO zwalnianie pamięci
-  mutex_lock(&context->finish); // TODO zmienić rodzaj locka na nieblokujący przerwać kill
+  down_interruptible(&context->sem); //TODO
+  kfree(data); //TODO zwalnianie pamięci
+  // wait_event_interruptible(context->write_queue, context->write_finished == 1);
+  // mutex_lock(&context->finish); // TODO zmienić rodzaj locka na nieblokujący przerwać kill
   printk(KERN_INFO "monter_write end");
   // msleep(100);
-  kfree(data);
+  // kfree(data);
   cmd_type = ioread32(context->mdev->bar0 + MONTER_STATUS);
   printk(KERN_ALERT "%u", cmd_type);
+  mutex_unlock(&(context->mdev->write_mutex));
   return count;
 fail:
   printk(KERN_INFO "monter_write fail");
   kfree(data);
+  mutex_unlock(&(context->mdev->write_mutex));
   return ret;
 }
 
@@ -344,7 +363,7 @@ static int monter_fsync(struct file *filp, loff_t start, loff_t end, int datasyn
   uint32_t u;
   struct monter_context *context = filp->private_data;
 
-  // msleep(1000);
+  // msleep(100);
 
   u = ioread32(context->mdev->bar0 + MONTER_STATUS);
   printk(KERN_ALERT "FSYNC %u", u);
@@ -373,7 +392,10 @@ static int monter_open(struct inode *inode, struct file *filp) {
   context->state = 0;
   context->operation = 0;
   monter_dev->current_context = NULL;
-  mutex_init(&context->finish);
+  // mutex_init(&context->finish);
+  // init_completion(&event);
+  // init_waitqueue_head(&(context->write_queue));
+  sema_init(&context->sem, 0);
   filp->private_data = context;
   return 0;
 }
@@ -472,6 +494,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
   }
 
   spin_lock_init(&monter_dev->slock); // TODO dodane
+  mutex_init(&monter_dev->write_mutex);
 
 	ret = request_irq(dev->irq, monter_irq_handler, IRQF_SHARED, "monter", monter_dev);
   if (IS_ERR_VALUE(ret)) {
