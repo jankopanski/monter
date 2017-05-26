@@ -35,12 +35,12 @@ MODULE_LICENSE("GPL");
 #define MONTER_REDC 1
 
 static struct class *monter_class = NULL;
-dev_t dev_base = 0; // zakodowany major + minor
+dev_t dev_base = 0;
 int monter_major = 0;
 static DEFINE_IDR(monter_idr);
 
-// spinlock_t xxx_lock = SPIN_LOCK_UNLOCKED;
-// unsigned long flags;
+LIST_HEAD(device_list_begin);
+DEFINE_SPINLOCK(device_list_lock);
 
 struct cmd_batch {
   uint32_t cmds[32];
@@ -57,6 +57,7 @@ struct monter_dev {
 	void __iomem *bar0;
   struct monter_context *current_context;
   struct list_head cmd_queue;
+  struct list_head device_list;
   struct mutex write_mutex;
   spinlock_t slock;
 };
@@ -526,6 +527,7 @@ struct file_operations monter_fops = {
 
 static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	long ret;
+  unsigned long flags;
   uint32_t reg = 0;
 	struct monter_dev *monter_dev;
 	struct device *device;
@@ -635,6 +637,11 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	}
 
   monter_dev->current_context = NULL; // już jest
+
+  spin_lock_irqsave(&device_list_lock, flags);
+  list_add(&monter_dev->device_list, &device_list_begin);
+  spin_unlock_irqrestore(&device_list_lock, flags);
+
 	pci_set_drvdata(dev, monter_dev);
 
   reg = ioread32(monter_dev->bar0 + MONTER_ENABLE);
@@ -670,9 +677,13 @@ err_pci_enable:
 
 static void monter_remove(struct pci_dev *dev) {
   struct monter_dev *monter_dev = pci_get_drvdata(dev);
+  unsigned long flags;
   printk(KERN_INFO "monter_remove");
   // iowrite32(0, aesdev->bar0 + AESDEV_ENABLE);
   // iowrite32(0, aesdev->bar0 + AESDEV_INTR_ENABLE);
+  spin_lock_irqsave(&device_list_lock, flags);
+  list_del(&monter_dev->device_list);
+  spin_unlock_irqrestore(&device_list_lock, flags);
   iowrite32(3, monter_dev->bar0 + MONTER_RESET);
   device_destroy(monter_class, monter_dev->cdev.dev);
   cdev_del(&monter_dev->cdev);
@@ -700,7 +711,6 @@ static struct pci_driver monter_driver = {
 
 static int __init monter_init(void) {
   long ret = -EINVAL;
-	// int i;
 
 	monter_class = class_create(THIS_MODULE, "monter");
   if (IS_ERR(monter_class)) {
@@ -720,6 +730,8 @@ static int __init monter_init(void) {
     printk(KERN_ALERT "pci_register_driver");
     goto err_chrdev;
   }
+
+  // spin_lock_init(&device_list_lock);
   return 0;
 
 err_chrdev:
