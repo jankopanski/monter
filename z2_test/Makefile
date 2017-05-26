@@ -3,7 +3,7 @@ TESTS = \
 		test-invalid \
 		test-mmap-later \
 		test-reuse-addr \
-# 		test-long-queue \
+		test-long-queue \
 # 		test-multi-context \
 # 		test-big-writes \
 # 		test-multi-device
