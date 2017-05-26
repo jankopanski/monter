@@ -107,6 +107,8 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
   struct cmd_batch *batch;
   uint32_t intr;
   unsigned long flags;
+  printk(KERN_INFO "monter_irq_handler");
+  // msleep(100);
   spin_lock_irqsave(&monter_dev->slock, flags);
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
   // stat = ioread32(monter_dev->bar0 + MONTER_STATUS);
@@ -483,19 +485,28 @@ static int monter_open(struct inode *inode, struct file *filp) {
 
 static int monter_release(struct inode *inode, struct file *filp) {
   struct monter_context *context = filp->private_data;
+  struct list_head *pos, *next;
+  struct cmd_batch *batch;
   int i;
   unsigned long flags;
 	printk(KERN_INFO "monter_release");
+  spin_lock_irqsave(&context->mdev->slock, flags);
+  if (context->mdev->current_context == context) {
+    context->mdev->current_context = NULL;
+  }
+  list_for_each_safe(pos, next, &context->mdev->cmd_queue) {
+    batch = list_entry(pos, struct cmd_batch, queue);
+    if (batch->context == context) {
+      list_del(pos);
+      kfree(batch);
+    }
+  }
   if (context->state) {
     for (i = 0; i < context->page_num; ++i) {
       if (context->kern_pages[i]) {
         dma_free_coherent(&context->mdev->pdev->dev, PAGE_SIZE, context->kern_pages[i], context->dma_pages[i]);
       }
     }
-  }
-  spin_lock_irqsave(&context->mdev->slock, flags);
-  if (context->mdev->current_context == context) {
-    context->mdev->current_context = NULL;
   }
   kfree(context);
   spin_unlock_irqrestore(&context->mdev->slock, flags);
