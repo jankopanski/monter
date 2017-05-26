@@ -4,11 +4,11 @@ TESTS = \
 		test-mmap-later \
 		test-reuse-addr \
 		test-long-queue \
-# 		test-multi-context \
-# 		test-big-writes \
-# 		test-multi-device
+		test-multi-context \
+		test-big-writes \
+		test-multi-device
 
-# TESTS = test-reuse-addr
+# TESTS = test-multi-device
 
 CFLAGS = -g
 LDFLAGS =
