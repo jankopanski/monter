@@ -39,7 +39,7 @@ static DEFINE_SPINLOCK(device_list_lock);
 
 struct cmd_batch {
   uint32_t cmds[32];
-  int num, end;
+  int num;
   struct monter_context *context;
   struct list_head queue;
 };
@@ -321,11 +321,9 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     batch->context = context;
     if (cmd_num + 1 - i <= 32) {
       batch->num = cmd_num + 1 - i;
-      batch->end = 1;
     }
     else {
       batch->num = 32;
-      batch->end = 0;
     }
     memcpy(batch->cmds, data + i, batch->num * 4);
     spin_lock_irqsave(&context->mdev->slock, flags);
