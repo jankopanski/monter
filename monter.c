@@ -55,7 +55,7 @@ struct monter_dev {
   spinlock_t slock;
 };
 
-struct monter_dev *monter_devices;
+// struct monter_dev *monter_devices;
 
 struct monter_context {
   struct monter_dev *mdev;
@@ -86,12 +86,23 @@ static void switch_context(struct monter_context *context) {
 }
 
 static irqreturn_t monter_irq_handler(int irq, void *dev) {
-  struct monter_dev *monter_dev = dev;
-  struct list_head *ptr;
+  struct monter_dev *monter_dev, *list_dev;
+  struct list_head *ptr, *device_ptr;
   struct cmd_batch *batch;
   uint32_t intr;
-  unsigned long flags;
+  unsigned long flags, device_list_flags;
+  int is_device_member = 0;
   printk(KERN_INFO "monter_irq_handler begin");
+  spin_lock_irqsave(&device_list_lock, device_list_flags);
+  list_for_each(device_ptr, &device_list_begin) {
+    if (device_ptr != &device_list_begin) {
+      list_dev = list_entry(device_ptr, struct monter_dev, device_list);
+      if (list_dev == dev) is_device_member = 1;
+    }
+  }
+  spin_unlock_irqrestore(&device_list_lock, device_list_flags);
+  if (!is_device_member) return IRQ_NONE;
+  monter_dev = dev;
   spin_lock_irqsave(&monter_dev->slock, flags);
   intr = ioread32(monter_dev->bar0 + MONTER_INTR);
   if (!intr) {
@@ -99,6 +110,10 @@ static irqreturn_t monter_irq_handler(int irq, void *dev) {
     return IRQ_NONE;
   }
   iowrite32(intr, monter_dev->bar0 + MONTER_INTR);
+  if (intr & 0x6) {
+    spin_unlock_irqrestore(&monter_dev->slock, flags);
+    return IRQ_HANDLED;
+  }
   if (monter_dev->current_context && monter_dev->current_context->incr_batch_num) {
     monter_dev->current_context->incr_batch_num = 0;
     monter_dev->current_context->done_batch_num++;
