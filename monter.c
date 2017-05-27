@@ -256,26 +256,22 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
 	printk(KERN_INFO "monter_write begin");
   if (context->state != 1) {
     printk(KERN_ALERT "monter_write state: %d", context->state);
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   if (count % 4) {
     printk(KERN_ALERT "monter_write count: %lu", count);
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   data = kmalloc(count + 4, GFP_KERNEL);
   if (!data) {
     printk(KERN_ALERT "monter_write data allocation");
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   printk(KERN_INFO "monter_write before copy_from_user: %lld %lu", filp->f_pos, count);
   read = copy_from_user(data, buf, count);
   if (read) {
     printk(KERN_ALERT "copy_from_user: %lu", read);
-    ret = -EINVAL;
-    goto err_data;
+    return -EINVAL;
   }
   *f_pos = filp->f_pos + count;
   cmd_ptr = data;
@@ -327,10 +323,14 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   }
   printk(KERN_INFO "monter_write before context switch: %p %p", context->mdev->current_context, context);
   data[cmd_num] = MONTER_CMD_COUNTER(0, 1);
-  spin_lock_irqsave(&context->mdev->slock, flags);
+  mutex_lock(&(context->mdev->write_mutex));
   printk(KERN_INFO "inside spinlock");
   for (i = 0; i <= cmd_num;) {
     batch = kmalloc(sizeof(struct cmd_batch), GFP_KERNEL);
+    if (!batch) {
+      mutex_unlock(&(context->mdev->write_mutex));
+      return -EINVAL;
+    }
     batch->context = context;
     if (cmd_num + 1 - i <= 32) {
       batch->num = cmd_num + 1 - i;
@@ -342,26 +342,28 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     }
     memcpy(batch->cmds, data + i, batch->num * 4);
     printk(KERN_INFO "before INIT_LIST_HEAD");
+    spin_lock_irqsave(&context->mdev->slock, flags);
     INIT_LIST_HEAD(&batch->queue);
     printk(KERN_INFO "before list_add_tail");
     list_add_tail(&batch->queue, &context->mdev->cmd_queue);
+    spin_unlock_irqrestore(&context->mdev->slock, flags);
     context->batch_num++;
     i += batch->num;
   }
   printk(KERN_INFO "after spinlock loop");
+  spin_lock_irqsave(&context->mdev->slock, flags);
   status = ioread32(context->mdev->bar0 + MONTER_STATUS);
   if (!(status & 0x3)) {
     iowrite32(MONTER_CMD_COUNTER(0, 1), context->mdev->bar0 + MONTER_FIFO_SEND);
   }
   spin_unlock_irqrestore(&context->mdev->slock, flags);
+  mutex_unlock(&(context->mdev->write_mutex));
   kfree(data);
   printk(KERN_INFO "monter_write end");
   return count;
+
 err_data:
   kfree(data);
-err_mutex:
-  printk(KERN_INFO "monter_write err_data");
-  // mutex_unlock(&(context->mdev->write_mutex));
   return ret;
 }
 
