@@ -138,7 +138,7 @@ static int parse_addr_ab(struct monter_context *context, uint32_t *cmd_ptr, unsi
   uint32_t addr_a = MONTER_SWCMD_ADDR_A(*cmd_ptr), addr_b = MONTER_SWCMD_ADDR_B(*cmd_ptr);
   uint32_t addr_ab = MONTER_CMD_ADDR_AB(addr_a, addr_b, notify);
   if (addr_a >= context->size || addr_b >= context->size) {
-    printk(KERN_ALERT "address outside of data area: %u %u %lu", addr_a, addr_b, context->size);
+    printk(KERN_WARNING "address outside of data area: %u %u %lu", addr_a, addr_b, context->size);
     return -EINVAL;
   }
   *cmd_ptr = addr_ab;
@@ -151,21 +151,21 @@ static int parse_run_op(struct monter_context *context, uint32_t *cmd_ptr, int m
   uint32_t size_m1 = MONTER_SWCMD_RUN_SIZE(*cmd_ptr), addr_d = MONTER_SWCMD_ADDR_D(*cmd_ptr);
   uint32_t run_op = 0;
   if (*cmd_ptr & 1<<17) {
-    printk(KERN_ALERT "send_run_op bit 17");
+    printk(KERN_WARNING "send_run_op bit 17");
     return -EINVAL;
   }
   if (addr_d >= context->size) {
-    printk(KERN_ALERT "result address outside of data area: %u %lu", addr_d, context->size);
+    printk(KERN_WARNING "result address outside of data area: %u %lu", addr_d, context->size);
     return -EINVAL;
   }
   if (context->addr_b + size_m1 >= context->size) {
-    printk(KERN_ALERT "number under B address is outside of data area: %u %lu",
+    printk(KERN_WARNING "number under B address is outside of data area: %u %lu",
     context->addr_b + size_m1, context->size);
     return -EINVAL;
   }
   if (mult_or_redc == MONTER_MULT) {
     if (context->addr_a + size_m1 >= context->size) {
-      printk(KERN_ALERT "number under A address is outside of data area: %u %lu",
+      printk(KERN_WARNING "number under A address is outside of data area: %u %lu",
       context->addr_a + size_m1, context->size);
       return -EINVAL;
     }
@@ -175,7 +175,7 @@ static int parse_run_op(struct monter_context *context, uint32_t *cmd_ptr, int m
     run_op = MONTER_CMD_RUN_REDC(size_m1, addr_d, notify);
   }
   else {
-    printk(KERN_ALERT "send_run_op");
+    printk(KERN_WARNING "send_run_op");
     return -EINVAL;
   }
   *cmd_ptr = run_op;
@@ -189,11 +189,11 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
   switch (cmd) {
     case MONTER_IOCTL_SET_SIZE:
       if (context->state) {
-        printk(KERN_ALERT "context->state: %u", context->state);
+        printk(KERN_WARNING "context->state: %u", context->state);
         return -EINVAL;
       }
       if (size <= 0 || size > MONTER_MAX_SIZE || size % PAGE_SIZE != 0) {
-        printk(KERN_ALERT "ioctl size: %lu", size);
+        printk(KERN_WARNING "ioctl size: %lu", size);
         return -EINVAL;
       }
       context->size = size;
@@ -201,7 +201,7 @@ static long monter_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
       for (i = 0; i < context->page_num; ++i) {
         context->kern_pages[i] = dma_alloc_coherent(&context->mdev->pdev->dev, PAGE_SIZE, &(context->dma_pages[i]), GFP_KERNEL);
         if (IS_ERR_OR_NULL(context->kern_pages[i])) {
-          printk(KERN_ALERT "dma_alloc_coherent: %p %llu", context->kern_pages[i], context->dma_pages[i]);
+          printk(KERN_WARNING "dma_alloc_coherent: %p %llu", context->kern_pages[i], context->dma_pages[i]);
           return PTR_ERR(context->kern_pages[i]);
         }
       }
@@ -220,7 +220,7 @@ static int monter_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf) {
   page = virt_to_page(context->kern_pages[page_num]);
   ret = vm_insert_page(vma, vma->vm_start + (page_num << PAGE_SHIFT), page);
   if (IS_ERR_VALUE(ret)) {
-    printk(KERN_ALERT "vm_insert_page");
+    printk(KERN_WARNING "vm_insert_page");
     return VM_FAULT_SIGBUS;
   }
   return VM_FAULT_NOPAGE;
@@ -246,21 +246,21 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   uint32_t *data, *cmd_ptr;
   unsigned i, cmd_num, notify;
   if (context->state != 1) {
-    printk(KERN_ALERT "monter_write state: %d", context->state);
+    printk(KERN_WARNING "monter_write state: %d", context->state);
     return -EINVAL;
   }
   if (count % 4) {
-    printk(KERN_ALERT "monter_write count: %lu", count);
+    printk(KERN_WARNING "monter_write count: %lu", count);
     return -EINVAL;
   }
   data = kmalloc(count + 4, GFP_KERNEL);
   if (!data) {
-    printk(KERN_ALERT "monter_write data allocation");
+    printk(KERN_WARNING "monter_write data allocation");
     return -ENOMEM;
   }
   read = copy_from_user(data, buf, count);
   if (read) {
-    printk(KERN_ALERT "copy_from_user: %lu", read);
+    printk(KERN_WARNING "copy_from_user: %lu", read);
     return -EINVAL;
   }
   *f_pos = filp->f_pos + count;
@@ -273,37 +273,37 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
       case MONTER_SWCMD_TYPE_ADDR_AB:
         ret = parse_addr_ab(context, cmd_ptr, notify);
         if (ret) {
-          printk(KERN_ALERT "parse_addr_ab");
+          printk(KERN_WARNING "parse_addr_ab");
           goto err_data;
         }
         context->operation = 1;
         break;
       case MONTER_SWCMD_TYPE_RUN_MULT:
         if (!context->operation) {
-          printk(KERN_ALERT "monter_write MULT without ADDR");
+          printk(KERN_WARNING "monter_write MULT without ADDR");
           ret = -EINVAL;
           goto err_data;
         };
         ret = parse_run_op(context, cmd_ptr, MONTER_MULT, notify);
         if (ret) {
-          printk(KERN_ALERT "parse_run_op MULT");
+          printk(KERN_WARNING "parse_run_op MULT");
           goto err_data;
         }
         break;
       case MONTER_SWCMD_TYPE_RUN_REDC:
         if (!context->operation) {
-          printk(KERN_ALERT "monter_write REDC without ADDR");
+          printk(KERN_WARNING "monter_write REDC without ADDR");
           ret = -EINVAL;
           goto err_data;
         };
         ret = parse_run_op(context, cmd_ptr, MONTER_REDC, notify);
         if (ret) {
-          printk(KERN_ALERT "parse_run_op REDC");
+          printk(KERN_WARNING "parse_run_op REDC");
           goto err_data;
         }
         break;
       default:
-        printk(KERN_ALERT "invalid cmd type");
+        printk(KERN_WARNING "invalid cmd type");
         ret = -EINVAL;
         goto err_data;
     }
@@ -364,7 +364,7 @@ static int monter_open(struct inode *inode, struct file *filp) {
   monter_dev = container_of(inode->i_cdev, struct monter_dev, cdev);
   context = kmalloc(sizeof(struct monter_context), GFP_KERNEL);
   if (!context) {
-    printk(KERN_ALERT "kmalloc %d:%d", major, minor);
+    printk(KERN_WARNING "kmalloc %d:%d", major, minor);
     return -ENOMEM;
   }
   context->mdev = monter_dev;
@@ -434,7 +434,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
 	monter_dev = kmalloc(sizeof(struct monter_dev), GFP_KERNEL);
 	if (!monter_dev) {
-		printk(KERN_ALERT "kmalloc");
+		printk(KERN_WARNING "kmalloc");
 		return -ENOMEM;
 	}
 	monter_dev->pdev = dev;
@@ -442,19 +442,19 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
 	ret = pci_enable_device(dev);
 	if (IS_ERR_VALUE(ret)) {
-		printk(KERN_ALERT "pci_enable_device");
+		printk(KERN_WARNING "pci_enable_device");
 		goto err_pci_enable;
 	}
 
 	ret = pci_request_region(dev, 0, "monter");
 	if (IS_ERR_VALUE(ret)) {
-		printk(KERN_ALERT "pci_request_region");
+		printk(KERN_WARNING "pci_request_region");
 		goto err_pci_region;
 	}
 
 	monter_dev->bar0 = pci_iomap(dev, 0, 0);
 	if (IS_ERR(monter_dev->bar0)) {
-		printk(KERN_ALERT "pci_iomap");
+		printk(KERN_WARNING "pci_iomap");
 		ret = PTR_ERR(monter_dev->bar0);
 		goto err_pci_iomap;
 	}
@@ -467,7 +467,7 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	pci_set_master(dev);
 	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
   if (IS_ERR_VALUE(ret)) {
-    printk(KERN_ALERT "dma_set_mask_and_coherent");
+    printk(KERN_WARNING "dma_set_mask_and_coherent");
     goto err_dma_mask;
   }
 
@@ -477,13 +477,13 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
 	ret = request_irq(dev->irq, monter_irq_handler, IRQF_SHARED, "monter", monter_dev);
   if (IS_ERR_VALUE(ret)) {
-    printk(KERN_ALERT "request_irq");
+    printk(KERN_WARNING "request_irq");
     goto err_irq;
   }
 
 	minor = idr_alloc(&monter_idr, monter_dev, 0, MONTER_MAX_COUNT, GFP_KERNEL);
 	if (IS_ERR_VALUE((long)minor)) {
-		printk(KERN_ALERT "idr_alloc");
+		printk(KERN_WARNING "idr_alloc");
 		ret = minor;
 		goto err_idr;
 	}
@@ -497,13 +497,13 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
 	ret = cdev_add(&monter_dev->cdev, dev_base + minor, 1);
 	if (IS_ERR_VALUE(ret)) {
-		printk(KERN_ALERT "cdev_add");
+		printk(KERN_WARNING "cdev_add");
 		goto err_cdev;
 	}
 
 	device = device_create(monter_class, &dev->dev, monter_dev->cdev.dev, monter_dev, "monter%d", minor);
 	if (IS_ERR(device)) {
-		printk(KERN_ALERT "device_create");
+		printk(KERN_WARNING "device_create");
 		ret = PTR_ERR(device);
 		goto err_dev;
 	}
@@ -568,20 +568,20 @@ static int __init monter_init(void) {
 
 	monter_class = class_create(THIS_MODULE, "monter");
   if (IS_ERR(monter_class)) {
-    printk(KERN_ALERT "class_create");
+    printk(KERN_WARNING "class_create");
     return PTR_ERR(monter_class);
   }
 
   ret = alloc_chrdev_region(&dev_base, 0, MONTER_MAX_COUNT, "monter");
   if (IS_ERR_VALUE(ret)) {
-    printk(KERN_ALERT "alloc_chrdev_region");
+    printk(KERN_WARNING "alloc_chrdev_region");
 		goto err_class;
   }
   monter_major = MAJOR(dev_base);
 
   ret = pci_register_driver(&monter_driver);
   if (IS_ERR_VALUE(ret)) {
-    printk(KERN_ALERT "pci_register_driver");
+    printk(KERN_WARNING "pci_register_driver");
     goto err_chrdev;
   }
   return 0;
