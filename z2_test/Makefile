@@ -8,7 +8,7 @@ TESTS = \
 		test-big-writes \
 		test-multi-device
 
-# TESTS = test-mmap-later test-reuse-addr
+# TESTS = test-multi-context
 
 CFLAGS = -g
 LDFLAGS =
