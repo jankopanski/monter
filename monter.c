@@ -34,6 +34,9 @@ dev_t dev_base = 0;
 int monter_major = 0;
 static DEFINE_IDR(monter_idr);
 
+static LIST_HEAD(device_list_begin);
+static DEFINE_SPINLOCK(device_list_lock);
+
 struct cmd_batch {
   uint32_t cmds[32];
   int num, end;
@@ -47,6 +50,7 @@ struct monter_dev {
 	void __iomem *bar0;
   struct monter_context *current_context;
   struct list_head cmd_queue;
+  struct list_head device_list;
   struct mutex write_mutex;
   spinlock_t slock;
 };
@@ -428,6 +432,7 @@ struct file_operations monter_fops = {
 
 static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 	long ret;
+  unsigned long flags;
 	struct monter_dev *monter_dev;
 	struct device *device;
 	int minor;
@@ -488,6 +493,13 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 		goto err_idr;
 	}
 
+  monter_dev->current_context = NULL;
+
+  INIT_LIST_HEAD(&monter_dev->device_list);
+  spin_lock_irqsave(&device_list_lock, flags);
+  list_add(&monter_dev->device_list, &device_list_begin);
+  spin_unlock_irqrestore(&device_list_lock, flags);
+
 	ret = cdev_add(&monter_dev->cdev, dev_base + minor, 1);
 	if (IS_ERR_VALUE(ret)) {
 		printk(KERN_ALERT "cdev_add");
@@ -501,7 +513,6 @@ static int monter_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 		goto err_dev;
 	}
 
-  monter_dev->current_context = NULL;
 	pci_set_drvdata(dev, monter_dev);
 
   printk(KERN_INFO "pci_probe");
@@ -528,6 +539,12 @@ err_pci_enable:
 
 static void monter_remove(struct pci_dev *dev) {
   struct monter_dev *monter_dev = pci_get_drvdata(dev);
+  unsigned long flags;
+
+  spin_lock_irqsave(&device_list_lock, flags);
+  list_del(&monter_dev->device_list);
+  spin_unlock_irqrestore(&device_list_lock, flags);
+
   iowrite32(3, monter_dev->bar0 + MONTER_RESET);
   device_destroy(monter_class, monter_dev->cdev.dev);
   cdev_del(&monter_dev->cdev);
