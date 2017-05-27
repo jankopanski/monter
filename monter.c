@@ -247,7 +247,7 @@ static int monter_mmap(struct file *flip, struct vm_area_struct *vma) {
 static ssize_t monter_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos) {
   struct monter_context *context = filp->private_data;
   struct cmd_batch *batch;
-  int ret = 0;
+  int ret = -EINVAL;
   unsigned long read, flags;
   uint32_t cmd_type, status;
   uint32_t *data, *cmd_ptr;
@@ -256,25 +256,21 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
 	printk(KERN_INFO "monter_write begin");
   if (context->state != 1) {
     printk(KERN_ALERT "monter_write state: %d", context->state);
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   if (count % 4) {
     printk(KERN_ALERT "monter_write count: %lu", count);
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   data = kmalloc(count + 4, GFP_KERNEL);
   if (!data) {
     printk(KERN_ALERT "monter_write data allocation");
-    ret = -EINVAL;
-    goto err_mutex;
+    return -EINVAL;
   }
   printk(KERN_INFO "monter_write before copy_from_user: %lld %lu", filp->f_pos, count);
   read = copy_from_user(data, buf, count);
   if (read) {
     printk(KERN_ALERT "copy_from_user: %lu", read);
-    ret = -EINVAL;
     goto err_data;
   }
   *f_pos = filp->f_pos + count;
@@ -297,7 +293,6 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
       case MONTER_SWCMD_TYPE_RUN_MULT:
         if (!context->operation) {
           printk(KERN_ALERT "monter_write MULT without ADDR");
-          ret = -EINVAL;
           goto err_data;
         };
         ret = parse_run_op(context, cmd_ptr, MONTER_MULT, notify);
@@ -309,7 +304,6 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
       case MONTER_SWCMD_TYPE_RUN_REDC:
         if (!context->operation) {
           printk(KERN_ALERT "monter_write REDC without ADDR");
-          ret = -EINVAL;
           goto err_data;
         };
         ret = parse_run_op(context, cmd_ptr, MONTER_REDC, notify);
@@ -320,17 +314,20 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
         break;
       default:
         printk(KERN_ALERT "invalid cmd type");
-        ret = -EINVAL;
         goto err_data;
     }
     cmd_ptr++;
   }
   printk(KERN_INFO "monter_write before context switch: %p %p", context->mdev->current_context, context);
   data[cmd_num] = MONTER_CMD_COUNTER(0, 1);
-  spin_lock_irqsave(&context->mdev->slock, flags);
+  mutex_lock(&(context->mdev->write_mutex));
   printk(KERN_INFO "inside spinlock");
   for (i = 0; i <= cmd_num;) {
     batch = kmalloc(sizeof(struct cmd_batch), GFP_KERNEL);
+    if (!batch) {
+      printk(KERN_ALERT "monter_write batch allocation");
+      goto err_mutex;
+    }
     batch->context = context;
     if (cmd_num + 1 - i <= 32) {
       batch->num = cmd_num + 1 - i;
@@ -342,26 +339,29 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     }
     memcpy(batch->cmds, data + i, batch->num * 4);
     printk(KERN_INFO "before INIT_LIST_HEAD");
+    spin_lock_irqsave(&context->mdev->slock, flags);
     INIT_LIST_HEAD(&batch->queue);
     printk(KERN_INFO "before list_add_tail");
     list_add_tail(&batch->queue, &context->mdev->cmd_queue);
+    spin_unlock_irqrestore(&context->mdev->slock, flags);
     context->batch_num++;
     i += batch->num;
   }
   printk(KERN_INFO "after spinlock loop");
+  spin_lock_irqsave(&context->mdev->slock, flags);
   status = ioread32(context->mdev->bar0 + MONTER_STATUS);
   if (!(status & 0x3)) {
     iowrite32(MONTER_CMD_COUNTER(0, 1), context->mdev->bar0 + MONTER_FIFO_SEND);
   }
   spin_unlock_irqrestore(&context->mdev->slock, flags);
+  mutex_unlock(&(context->mdev->write_mutex));
   kfree(data);
   printk(KERN_INFO "monter_write end");
   return count;
+err_mutex:
+  mutex_unlock(&(context->mdev->write_mutex));
 err_data:
   kfree(data);
-err_mutex:
-  printk(KERN_INFO "monter_write err_data");
-  // mutex_unlock(&(context->mdev->write_mutex));
   return ret;
 }
 
