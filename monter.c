@@ -265,7 +265,7 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
   data = kmalloc(count + 4, GFP_KERNEL);
   if (!data) {
     printk(KERN_ALERT "monter_write data allocation");
-    return -EINVAL;
+    return -ENOMEM;
   }
   printk(KERN_INFO "monter_write before copy_from_user: %lld %lu", filp->f_pos, count);
   read = copy_from_user(data, buf, count);
@@ -329,7 +329,8 @@ static ssize_t monter_write(struct file *filp, const char __user *buf, size_t co
     batch = kmalloc(sizeof(struct cmd_batch), GFP_KERNEL);
     if (!batch) {
       mutex_unlock(&(context->mdev->write_mutex));
-      return -EINVAL;
+      ret = -ENOMEM;
+      goto err_data;
     }
     batch->context = context;
     if (cmd_num + 1 - i <= 32) {
